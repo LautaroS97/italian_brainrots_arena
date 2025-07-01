@@ -1,18 +1,17 @@
 import random
-import pygame
 from typing import List
 from game.sound_manager import SoundManager
 from game.skill import Skill
 from game.brainrot import Brainrot
-
+from game.battle_event import BattleEvent
+from constants import COLOR_PP, COLOR_HP
 
 class _MsgProxy:
-    def __init__(self, sink: list[str]):
+    def __init__(self, sink: List[BattleEvent]):
         self._sink = sink
     def show_message(self, text: str):
         if text:
-            self._sink.append(text)
-
+            self._sink.append(BattleEvent("info", text))
 
 class BattleManager:
     def __init__(
@@ -24,136 +23,119 @@ class BattleManager:
         self.player1 = player1
         self.player2 = player2
         self.turn = 1
-        self.status_messages: List[str] = [
-            f"¡{self.get_active_player().name} comienza el combate!"
+        self.events: List[BattleEvent] = [
+            BattleEvent("info", f"{self.get_active_player().name} comienza el combate!")
         ]
         self.game_over = False
         self.winner: str | None = None
         self.sound_manager = sound_manager
         self.pending_victory_type: str | None = None
 
-    # ───────────────────────── utilidades ─────────────────────────
     def get_active_player(self) -> Brainrot:
         return self.player1 if self.turn == 1 else self.player2
 
     def get_enemy_player(self) -> Brainrot:
         return self.player2 if self.turn == 1 else self.player1
 
-    # ───────────────────────── turno de acción ────────────────────
     def apply_action(self, skill: Skill):
         if self.game_over:
-            self.status_messages = ["El combate ya ha terminado."]
+            self.events = [BattleEvent("info", "El combate ya ha terminado.")]
             return
 
         attacker = self.get_active_player()
         defender = self.get_enemy_player()
-        messages: List[str] = []
+        events: List[BattleEvent] = []
 
-        # costo real de energía
-        cost = skill.energy_cost
-        for st in attacker.status_effects:
-            cost = getattr(st, "on_energy_calc", lambda c: c)(cost)
-        cost = int(cost * getattr(attacker, "next_energy_mult", 1.0))
-        attacker.next_energy_mult = 1.0
-
-        # efectos de estado
-        proxy = _MsgProxy(messages)
+        # efectos pendientes antes del skill
+        skip_turn = attacker.apply_pending_effects(events)
+        proxy = _MsgProxy(events)
         attacker.process_statuses(proxy)
         defender.process_statuses(proxy)
-        if self._check_immediate_death(attacker, defender, messages):
-            self.status_messages = messages
+        if self._check_immediate_death(attacker, defender, events):
+            self.events = events
+            return
+        if skip_turn:
+            self.turn = 2 if self.turn == 1 else 1
+            events.append(BattleEvent("info", f"Turno de {self.get_active_player().name}."))
+            self.events = events
             return
 
-        if attacker.skip_turn_flag:
-            attacker.skip_turn_flag = False
+        # nullify wall
+        if defender.nullify_next_attack:
+            defender.nullify_next_attack = False
+            cost = int(skill.energy_cost * attacker.next_energy_mult)
+            attacker.next_energy_mult = 1.0
             attacker.consume_energy(cost)
-            messages.append(f"{attacker.name} perdió su turno (−{cost} PP).")
+            events.append(BattleEvent("skill", f"{attacker.name} usó {skill.name}."))
+            events.append(BattleEvent("cost", f"Consumió {cost} PP.", COLOR_PP))
+            events.append(BattleEvent("info", "¡Pero el ataque fue anulado!"))
         else:
-            if defender.nullify_next_attack:
-                defender.nullify_next_attack = False
-                attacker.consume_energy(cost)
-                messages.append(
-                    f"{attacker.name} usó {skill.name} (−{cost} PP)! "
-                    f"¡Pero el ataque fue anulado!"
-                )
-            else:
-                skill._override_cost = cost
-                attacker.start_skill_animation(skill, defender, self.sound_manager)
-                result_text = skill.execute(attacker, defender)
-                delattr(skill, "_override_cost")
-                messages.append(result_text)
-
-                # reflejo de daño
-                if skill.is_direct_attack and getattr(defender, "reflect_damage_range", None):
-                    lo, hi = defender.reflect_damage_range
+            result, skill_events = skill.execute(attacker, defender)
+            events.extend(skill_events)
+            # reflejo de daño
+            if skill.is_direct_attack and getattr(defender, "reflect_on_next_direct", None):
+                flag, lo, hi = defender.reflect_on_next_direct
+                if flag:
                     reflected = random.randint(lo, hi)
                     attacker.take_damage(reflected)
-                    defender.reflect_damage_range = None
-                    messages.append(f"¡{defender.name} reflejó {reflected} puntos de daño!")
+                    defender.reflect_on_next_direct = (False, 0, 0)
+                    events.append(BattleEvent("damage", f"{defender.name} reflejó {reflected} PV.", COLOR_HP))
 
-        # victoria / turno
-        self._check_post_action(attacker, defender, messages)
+        # victoria y cambio de turno
+        self._check_post_action(attacker, defender, events)
         if not self.game_over:
             self.turn = 2 if self.turn == 1 else 1
-            messages.append(f"Turno de {self.get_active_player().name}.")
+            events.append(BattleEvent("info", f"Turno de {self.get_active_player().name}."))
 
-        self.status_messages = messages
+        self.events = events
 
-    # ─────────────────── helpers de victoria ─────────────────────
     def _check_immediate_death(
-        self, attacker: Brainrot, defender: Brainrot, msg_list: list[str]
+        self, attacker: Brainrot, defender: Brainrot, ev: List[BattleEvent]
     ) -> bool:
         if attacker.is_dead():
             self._set_winner(
-                defender, "health", msg_list,
-                f"{attacker.name} fue derrotado. {defender.name} gana el combate."
+                defender, "health", ev, f"{attacker.name} fue derrotado. {defender.name} gana el combate."
             )
             return True
         if defender.is_dead():
             self._set_winner(
-                attacker, "health", msg_list,
-                f"{defender.name} fue derrotado. {attacker.name} gana el combate."
+                attacker, "health", ev, f"{defender.name} fue derrotado. {attacker.name} gana el combate."
             )
             return True
         return False
 
     def _check_post_action(
-        self, attacker: Brainrot, defender: Brainrot, msg_list: list[str]
+        self, attacker: Brainrot, defender: Brainrot, ev: List[BattleEvent]
     ):
         if attacker.is_dead():
             self._set_winner(
-                defender, "health", msg_list,
-                f"{attacker.name} fue derrotado. {defender.name} gana el combate."
+                defender, "health", ev, f"{attacker.name} fue derrotado. {defender.name} gana el combate."
             )
         elif attacker.energy <= 0:
             self._set_winner(
-                defender, "energy", msg_list,
-                f"{attacker.name} se quedó sin energía. {defender.name} gana el combate."
+                defender, "energy", ev, f"{attacker.name} se quedó sin energía. {defender.name} gana el combate."
             )
         elif defender.is_dead():
             self._set_winner(
-                attacker, "health", msg_list,
-                f"{defender.name} fue derrotado. {attacker.name} gana el combate."
+                attacker, "health", ev, f"{defender.name} fue derrotado. {attacker.name} gana el combate."
             )
         elif defender.energy <= 0:
             self._set_winner(
-                attacker, "energy", msg_list,
-                f"{defender.name} se quedó sin energía. {attacker.name} gana el combate."
+                attacker, "energy", ev, f"{defender.name} se quedó sin energía. {attacker.name} gana el combate."
             )
 
     def _set_winner(
         self,
         winner_brainrot: Brainrot,
         victory_type: str,
-        msg_list: List[str],
+        ev: List[BattleEvent],
         final_msg: str,
     ):
         self.game_over = True
         self.winner = winner_brainrot.name
         self.pending_victory_type = victory_type
-        msg_list.append(final_msg)
+        ev.append(BattleEvent("info", final_msg))
 
-    # ─────────────── sonido de victoria ───────────────
     def play_victory_sound(self):
         if not self.game_over or not self.sound_manager:
             return
@@ -165,15 +147,12 @@ class BattleManager:
             self.sound_manager.play_victory_energy(loser, winner)
         self.pending_victory_type = None
 
-    # ───────────────────────── getters ─────────────────────────
     def is_game_over(self) -> bool:
         return self.game_over
 
-    def get_status_messages(self) -> List[str]:
-        return self.status_messages
+    def get_events(self) -> List[BattleEvent]:
+        return self.events
 
     def start_intro_sequence(self):
         if self.sound_manager:
-            self.sound_manager.play_intro_sequence(
-                self.player1.name, self.player2.name
-            )
+            self.sound_manager.play_intro_sequence(self.player1.name, self.player2.name)

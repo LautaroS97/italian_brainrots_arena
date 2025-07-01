@@ -1,8 +1,10 @@
 import os
 import pygame
+from typing import Dict
 from game.status_effects import StatusEffect
 from game.status_texts import STATUS_MESSAGES
-
+from game.battle_event import BattleEvent
+from constants import COLOR_HP, COLOR_PP
 
 def _load_frames(folder: str) -> list[pygame.Surface]:
     if not os.path.isdir(folder):
@@ -15,14 +17,12 @@ def _load_frames(folder: str) -> list[pygame.Surface]:
     )
     return [pygame.image.load(os.path.join(folder, f)).convert_alpha() for f in files]
 
-
 def _tint_red(surface: pygame.Surface, alpha: int = 120) -> pygame.Surface:
     tinted = surface.copy()
     red = pygame.Surface(tinted.get_size(), pygame.SRCALPHA)
     red.fill((255, 0, 0, alpha))
     tinted.blit(red, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
     return tinted
-
 
 class Brainrot:
     def __init__(
@@ -40,26 +40,23 @@ class Brainrot:
         self.lore_text, self.portrait_img = lore_text, portrait_img
         self.skills = skills
         self.skip_turn_flag = False
-
         self.status_effects: list[StatusEffect] = []
         self.damage_multiplier = 1.0
         self.pp_multiplier = 1.0
-
         self.next_attack_mult = 1.0
         self.next_energy_mult = 1.0
         self.nullify_next_attack = False
         self.reflect_on_next_direct = (False, 0, 0)
-
+        self.pending_effects: Dict[str, float | bool] = {}
+        self.last_damage_taken = 0
+        self.last_energy_lost = 0
         self._current_skill = None
-
         self.pos = (0, 0)
         self.flipped = False
-
         self._idle_path = idle_anim["file_root"]
         self._idle_fps = idle_anim.get("fps", 6)
         self._foot_offset = idle_anim.get("foot_offset", 0)
         self._frames_idle: list[pygame.Surface] = []
-
         self._state = "idle"
         self._frames_active = []
         self._fps_active = self._idle_fps
@@ -67,7 +64,6 @@ class Brainrot:
         self._time_acc = 0
         self._freeze_time = 0
         self._tint_time = 0
-
         self._move_fn = None
         self._orig_pos = None
         self._collision_frame = 0
@@ -99,7 +95,9 @@ class Brainrot:
                 self.status_effects.remove(status)
 
     def take_damage(self, amount: int):
-        self.hp = max(0, self.hp - int(amount * self.damage_multiplier))
+        real = int(amount * self.damage_multiplier)
+        self.last_damage_taken = real
+        self.hp = max(0, self.hp - real)
 
     def heal(self, amount: int):
         prev = self.hp
@@ -108,12 +106,31 @@ class Brainrot:
 
     def consume_energy(self, amount: int):
         real_cost = int(amount * self.pp_multiplier)
+        self.last_energy_lost = real_cost
         self.energy = max(0, self.energy - real_cost)
 
     def restore_energy(self, amount: int):
         prev = self.energy
         self.energy = min(self.max_energy, self.energy + amount)
         return self.energy - prev
+
+    def apply_pending_effects(self, event_list: list[BattleEvent]) -> bool:
+        skip = False
+        if self.pending_effects.get("skip_turn"):
+            event_list.append(BattleEvent("info", f"{self.name} perdió su turno.", None))
+            skip = True
+        dmg_mod = self.pending_effects.get("damage_mod")
+        if dmg_mod is not None:
+            self.next_attack_mult = dmg_mod
+            event_list.append(BattleEvent("info", f"Daño del próximo ataque reducido.", COLOR_HP))
+        pp_mod = self.pending_effects.get("energy_mod")
+        if pp_mod is not None:
+            self.next_energy_mult = pp_mod
+            event_list.append(BattleEvent("info", f"Coste de PP del próximo ataque aumentado.", COLOR_PP))
+        if self.pending_effects.get("nullify"):
+            self.nullify_next_attack = True
+        self.pending_effects.clear()
+        return skip
 
     def is_dead(self) -> bool:
         return self.hp <= 0
@@ -129,6 +146,9 @@ class Brainrot:
         self.next_energy_mult = 1.0
         self.nullify_next_attack = False
         self.reflect_on_next_direct = (False, 0, 0)
+        self.pending_effects.clear()
+        self.last_damage_taken = 0
+        self.last_energy_lost = 0
         self._set_idle()
 
     def load_assets(self):
@@ -144,7 +164,6 @@ class Brainrot:
         self._fps_active = anim.get("fps", 6)
         self._frame_idx = self._time_acc = 0
         self._state = "skill"
-
         self._freeze_frame = anim.get("freeze_frame", 0)
         self._freeze_total = anim.get("freeze_time", 0) if anim.get("freeze") else 0
         self._move_fn = anim.get("movement_fn") if anim.get("movement") else None
@@ -152,7 +171,6 @@ class Brainrot:
         self._collision_frame = anim.get("collision_frame", 0)
         self._collision_time = anim.get("collision_time", 0)
         self._defender_ref = defender if anim.get("collision") else None
-
         if sound_manager and anim.get("sound"):
             cb = anim.get("sound_fn")
             if cb:
@@ -163,16 +181,13 @@ class Brainrot:
             self.load_assets()
         if self._tint_time > 0:
             self._tint_time = max(0, self._tint_time - dt_ms)
-
         if self._state == "freeze":
             self._freeze_time -= dt_ms
             if self._freeze_time <= 0:
                 self._set_idle()
             return
-
         if not self._frames_active:
             return
-
         self._time_acc += dt_ms
         frame_time = 1000 / self._fps_active if self._fps_active else 1000
         while self._time_acc >= frame_time:
@@ -201,7 +216,6 @@ class Brainrot:
             frame = pygame.transform.flip(frame, True, False)
         if self._tint_time > 0:
             frame = _tint_red(frame)
-
         fw, fh = frame.get_size()
         sw, sh = screen.get_size()
         cx = int((self.pos[0] / 33.867) * sw)
