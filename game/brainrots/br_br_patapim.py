@@ -5,8 +5,9 @@ from game.skill_result import SkillResult
 from game.skill_effects import (
     deal_damage,
     raise_defense_nullify,
-    drain_energy
+    drain_energy,
 )
+
 
 def _patapum():
     def fn(att, riv):
@@ -14,7 +15,9 @@ def _patapum():
         riv.take_damage(dmg)
         riv.pending_effects["damage_mod"] = 0.8
         return SkillResult(damage=dmg, states_applied=["Debilitado 20%"], state_scope="next_move")
+
     return fn
+
 
 def get_brainrot():
     base = "assets/animations/Br_Br_Patapim"
@@ -31,7 +34,14 @@ def get_brainrot():
                 description="Ataque 10-15 PV.",
                 energy_cost=15,
                 execute=deal_damage(10, 15),
-                animation={"file_root": f"{base}/patapimba", "fps": 8, "movement": True, "collision": True}
+                animation={
+                    "file_root": f"{base}/patapimba",
+                    "fps": 8,
+                    "movement": True,
+                    "collision": True,
+                    "hit_start": 7,
+                    "hit_end": 10,
+                },
             ),
             Skill(
                 name="Arbustote",
@@ -40,14 +50,25 @@ def get_brainrot():
                 execute=raise_defense_nullify(),
                 priority=True,
                 is_direct_attack=False,
-                animation={"file_root": f"{base}/arbustote", "fps": 5, "freeze": True}
+                is_defense=True,
+                animation={
+                    "file_root": f"{base}/arbustote",
+                    "fps": 5,
+                },
             ),
             Skill(
                 name="Patapum",
                 description="Daño 15-20 PV y rival -20 % daño próximo.",
                 energy_cost=20,
                 execute=_patapum(),
-                animation={"file_root": f"{base}/patapum", "fps": 7, "movement": True, "collision": True}
+                animation={
+                    "file_root": f"{base}/patapum",
+                    "fps": 7,
+                    "movement": True,
+                    "collision": True,
+                    "hit_start": 5,
+                    "hit_end": 7,
+                },
             ),
             Skill(
                 name="Drenaje Vital",
@@ -55,7 +76,10 @@ def get_brainrot():
                 energy_cost=0,
                 execute=drain_energy(10),
                 is_direct_attack=False,
-                animation={"file_root": f"{base}/drenaje_vital", "fps": 6}
-            )
-        ]
+                animation={
+                    "file_root": f"{base}/drenaje_vital",
+                    "fps": 6,
+                },
+            ),
+        ],
     )

@@ -2,6 +2,7 @@ import pygame, re
 from utils import get_responsive_rect
 from constants import COLOR_HP, COLOR_PP
 
+
 class BattleUI:
     LIFE_COLOR = (235, 16, 33)
     ENERGY_COLOR = (20, 198, 9)
@@ -45,6 +46,9 @@ class BattleUI:
             "Anulado": pygame.image.load("assets/sprites/status/status_nullify.png").convert_alpha(),
         }
         self._rect_en1 = self._rect_en2 = None
+        self._allow_en_update = False
+        self._allow_hp_update = False
+        self._visible_statuses = {self.player1: set(), self.player2: set()}
 
     def _blit_with_shadow(self, text, font, pos, fg=(255, 255, 255), offset=(2, 2)):
         x, y = pos
@@ -62,7 +66,7 @@ class BattleUI:
 
     def _draw_bar_value(self, value, full_rect):
         self._blit_with_shadow(str(int(value)), self.font, (full_rect.x + 5,
-                              full_rect.y + (full_rect.height - self.font.get_height()) // 2))
+                            full_rect.y + (full_rect.height - self.font.get_height()) // 2))
 
     def _draw_bars(self):
         s = self.screen
@@ -79,25 +83,25 @@ class BattleUI:
         rect_en1 = self._draw_static_bar(0.67, 2.24, 5.14, 0.7, self.disp_en1, self.player1.max_energy, self.ENERGY_COLOR)
         rect_en2 = self._draw_static_bar(26.9, 2.24, 5.14, 0.7, self.disp_en2, self.player2.max_energy, self.ENERGY_COLOR)
         self._rect_en1, self._rect_en2 = rect_en1, rect_en2
-        self._draw_bar_value(self.player1.hp, rect_hp1)
-        self._draw_bar_value(self.player2.hp, rect_hp2)
-        self._draw_bar_value(self.player1.energy, rect_en1)
-        self._draw_bar_value(self.player2.energy, rect_en2)
+        self._draw_bar_value(self.disp_hp1, rect_hp1)
+        self._draw_bar_value(self.disp_hp2, rect_hp2)
+        self._draw_bar_value(self.disp_en1, rect_en1)
+        self._draw_bar_value(self.disp_en2, rect_en2)
 
     def _draw_status_icons(self, brainrot, bar_rect):
-        active = [e for e in brainrot.status_effects if not getattr(e, "cured", False)]
+        active = self._visible_statuses.get(brainrot, set())
         if not active:
             return
         icon_h = int(bar_rect.height * 1.2)
-        gap_px = 4
+        gap = 4
         x = bar_rect.x
         y = bar_rect.bottom + 5
-        for eff in active:
-            ico = self.status_icons.get(eff.name)
+        for name in active:
+            ico = self.status_icons.get(name)
             if ico:
                 surf = pygame.transform.scale(ico, (icon_h, icon_h))
                 self.screen.blit(surf, (x, y))
-                x += icon_h + gap_px
+                x += icon_h + gap
 
     def _draw_event(self, animator, event):
         if not animator or not event:
@@ -162,12 +166,39 @@ class BattleUI:
                 pygame.draw.rect(self.screen, (255, 255, 0), rect, 3)
 
     def _smooth_values(self, speed=0.18):
-        self.disp_hp1 += (self.player1.hp - self.disp_hp1) * speed
-        self.disp_en1 += (self.player1.energy - self.disp_en1) * speed
-        self.disp_hp2 += (self.player2.hp - self.disp_hp2) * speed
-        self.disp_en2 += (self.player2.energy - self.disp_en2) * speed
+        if self._allow_hp_update:
+            self.disp_hp1 += (self.player1.hp - self.disp_hp1) * speed
+            self.disp_hp2 += (self.player2.hp - self.disp_hp2) * speed
+        if self._allow_en_update:
+            self.disp_en1 += (self.player1.energy - self.disp_en1) * speed
+            self.disp_en2 += (self.player2.energy - self.disp_en2) * speed
+
+    def _process_event(self, event):
+        if event is None:
+            return
+        msg = getattr(event, "text", "")
+        if event.kind == "skill":
+            self._allow_en_update = False
+            self._allow_hp_update = False
+        elif event.kind == "cost":
+            self._allow_en_update = True
+        elif event.kind == "damage":
+            self._allow_hp_update = True
+        elif event.kind == "info":
+            if "adquirió" in msg:
+                name = msg.split("adquirió")[-1].strip().rstrip(".")
+                target = self.player1 if self.player1.name in msg else self.player2
+                self._visible_statuses[target].add(name)
+            if "curado" in msg or "cured" in msg:
+                for br in (self.player1, self.player2):
+                    for n in list(self._visible_statuses[br]):
+                        if n.lower() in msg.lower():
+                            self._visible_statuses[br].discard(n)
+        elif event.kind == "blocked":
+            pass
 
     def draw(self, animator=None, event=None):
+        self._process_event(event)
         self._smooth_values()
         self._draw_bars()
         if self._rect_en1 and self._rect_en2:

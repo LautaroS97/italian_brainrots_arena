@@ -6,12 +6,15 @@ from game.brainrot import Brainrot
 from game.battle_event import BattleEvent
 from constants import COLOR_PP, COLOR_HP
 
+
 class _MsgProxy:
     def __init__(self, sink: List[BattleEvent]):
         self._sink = sink
+
     def show_message(self, text: str):
         if text:
             self._sink.append(BattleEvent("info", text))
+
 
 class BattleManager:
     def __init__(
@@ -46,7 +49,8 @@ class BattleManager:
         defender = self.get_enemy_player()
         events: List[BattleEvent] = []
 
-        # efectos pendientes antes del skill
+        attacker._defended_this_turn = False
+
         skip_turn = attacker.apply_pending_effects(events)
         proxy = _MsgProxy(events)
         attacker.process_statuses(proxy)
@@ -60,7 +64,6 @@ class BattleManager:
             self.events = events
             return
 
-        # nullify wall
         if defender.nullify_next_attack:
             defender.nullify_next_attack = False
             cost = int(skill.energy_cost * attacker.next_energy_mult)
@@ -69,10 +72,13 @@ class BattleManager:
             events.append(BattleEvent("skill", f"{attacker.name} usó {skill.name}."))
             events.append(BattleEvent("cost", f"Consumió {cost} PP.", COLOR_PP))
             events.append(BattleEvent("info", "¡Pero el ataque fue anulado!"))
+            events.append(BattleEvent("blocked", "El ataque fue bloqueado."))
         else:
             result, skill_events = skill.execute(attacker, defender)
             events.extend(skill_events)
-            # reflejo de daño
+            if result.blocked:
+                events.append(BattleEvent("blocked", "El ataque fue bloqueado."))
+
             if skill.is_direct_attack and getattr(defender, "reflect_on_next_direct", None):
                 flag, lo, hi = defender.reflect_on_next_direct
                 if flag:
@@ -81,7 +87,8 @@ class BattleManager:
                     defender.reflect_on_next_direct = (False, 0, 0)
                     events.append(BattleEvent("damage", f"{defender.name} reflejó {reflected} PV.", COLOR_HP))
 
-        # victoria y cambio de turno
+        defender.resume_freeze()
+
         self._check_post_action(attacker, defender, events)
         if not self.game_over:
             self.turn = 2 if self.turn == 1 else 1

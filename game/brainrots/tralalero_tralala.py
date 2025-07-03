@@ -3,9 +3,10 @@ from game.skill import Skill
 from game.skill_effects import (
     deal_damage,
     deal_damage_with_status,
-    weaken_next_attack
+    weaken_next_attack,
 )
 from game.status_effects import Mojado
+
 
 def get_brainrot():
     base = "assets/animations/Tralalero_Tralala"
@@ -22,7 +23,12 @@ def get_brainrot():
                 description="Ataque 5-10 PV.",
                 energy_cost=5,
                 execute=deal_damage(5, 10),
-                animation={"file_root": f"{base}/altas_llantas", "fps": 6}
+                animation={
+                    "file_root": f"{base}/altas_llantas",
+                    "fps": 6,
+                    "hit_start": 5,
+                    "hit_end": 7,
+                },
             ),
             Skill(
                 name="Piel de Tiburón",
@@ -31,14 +37,24 @@ def get_brainrot():
                 execute=weaken_next_attack(0.25),
                 priority=True,
                 is_direct_attack=False,
-                animation={"file_root": f"{base}/piel_de_tiburon", "fps": 6, "freeze": True}
+                is_defense=True,
+                animation={
+                    "file_root": f"{base}/piel_de_tiburon",
+                    "fps": 6,
+                },
             ),
             Skill(
                 name="Chupetón",
                 description="Mordida 10-20 PV.",
                 energy_cost=10,
                 execute=deal_damage(10, 20),
-                animation={"file_root": f"{base}/chupeton", "fps": 7, "collision": True}
+                animation={
+                    "file_root": f"{base}/chupeton",
+                    "fps": 7,
+                    "collision": True,
+                    "hit_start": 7,
+                    "hit_end": 10,
+                },
             ),
             Skill(
                 name="Manguerazo",
@@ -46,7 +62,14 @@ def get_brainrot():
                 energy_cost=25,
                 execute=deal_damage_with_status(10, 20, Mojado),
                 is_direct_attack=False,
-                animation={"file_root": f"{base}/manguerazo", "fps": 8, "movement": True, "collision": True}
-            )
-        ]
+                animation={
+                    "file_root": f"{base}/manguerazo",
+                    "fps": 8,
+                    "movement": True,
+                    "collision": True,
+                    "hit_start": 8,
+                    "hit_end": 10,
+                },
+            ),
+        ],
     )

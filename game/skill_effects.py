@@ -1,6 +1,16 @@
 import random
 from game.skill_result import SkillResult
-from game.status_effects import Radiacion, Mojado, Mareado, Veneno, Debilitado20, Debilitado50, Debilitado75, EnergyUp25, NullifyNextAttack
+from game.status_effects import (
+    Radiacion,
+    Mojado,
+    Mareado,
+    Veneno,
+    Debilitado20,
+    Debilitado50,
+    Debilitado75,
+    EnergyUp25,
+    NullifyNextAttack,
+)
 
 def deal_damage(min_dmg: int, max_dmg: int):
     def fn(attacker, defender):
@@ -93,7 +103,7 @@ def weaken_next_attack(mult: float):
 def raise_defense_nullify():
     def fn(attacker, defender):
         attacker.nullify_next_attack = True
-        return SkillResult(states_applied=["Anulado"])
+        return SkillResult(states_applied=["Anulado"], state_scope="next_move")
     return fn
 
 def extra_energy_cost(factor: float):

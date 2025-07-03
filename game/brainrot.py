@@ -6,6 +6,7 @@ from game.status_texts import STATUS_MESSAGES
 from game.battle_event import BattleEvent
 from constants import COLOR_HP, COLOR_PP
 
+
 def _load_frames(folder: str) -> list[pygame.Surface]:
     if not os.path.isdir(folder):
         return []
@@ -17,12 +18,14 @@ def _load_frames(folder: str) -> list[pygame.Surface]:
     )
     return [pygame.image.load(os.path.join(folder, f)).convert_alpha() for f in files]
 
+
 def _tint_red(surface: pygame.Surface, alpha: int = 120) -> pygame.Surface:
     tinted = surface.copy()
     red = pygame.Surface(tinted.get_size(), pygame.SRCALPHA)
     red.fill((255, 0, 0, alpha))
     tinted.blit(red, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
     return tinted
+
 
 class Brainrot:
     def __init__(
@@ -57,6 +60,7 @@ class Brainrot:
         self._idle_fps = idle_anim.get("fps", 6)
         self._foot_offset = idle_anim.get("foot_offset", 0)
         self._frames_idle: list[pygame.Surface] = []
+        self._frames_idle_red: list[pygame.Surface] = []
         self._state = "idle"
         self._frames_active = []
         self._fps_active = self._idle_fps
@@ -66,9 +70,11 @@ class Brainrot:
         self._tint_time = 0
         self._move_fn = None
         self._orig_pos = None
-        self._collision_frame = 0
-        self._collision_time = 0
+        self._hit_start_frame = -1
+        self._hit_end_frame = -1
         self._defender_ref = None
+        self._red_active = False
+        self._defended_this_turn = False
 
     def add_status(self, new_status: StatusEffect, game_state=None):
         if any(isinstance(s, type(new_status)) for s in self.status_effects):
@@ -149,6 +155,8 @@ class Brainrot:
         self.pending_effects.clear()
         self.last_damage_taken = 0
         self.last_energy_lost = 0
+        self._red_active = False
+        self._defended_this_turn = False
         self._set_idle()
 
     def load_assets(self):
@@ -156,6 +164,10 @@ class Brainrot:
             self._frames_idle = _load_frames(self._idle_path)
             self._frames_active = self._frames_idle or []
             self._frame_idx = 0
+        if not self._frames_idle_red:
+            char_folder = os.path.basename(os.path.dirname(self._idle_path))
+            dmg_path = os.path.join("assets", "animations", "Damaged", f"{char_folder}_damaged", "idle")
+            self._frames_idle_red = _load_frames(dmg_path)
 
     def start_skill_animation(self, skill, defender, sound_manager=None):
         self._current_skill = skill
@@ -165,16 +177,25 @@ class Brainrot:
         self._frame_idx = self._time_acc = 0
         self._state = "skill"
         self._freeze_frame = anim.get("freeze_frame", 0)
-        self._freeze_total = anim.get("freeze_time", 0) if anim.get("freeze") else 0
+        if skill.is_defense and anim.get("freeze"):
+            self._freeze_total = -1
+        else:
+            self._freeze_total = anim.get("freeze_time", 0) if anim.get("freeze") else 0
         self._move_fn = anim.get("movement_fn") if anim.get("movement") else None
         self._orig_pos = self.pos
-        self._collision_frame = anim.get("collision_frame", 0)
-        self._collision_time = anim.get("collision_time", 0)
-        self._defender_ref = defender if anim.get("collision") else None
+        self._hit_start_frame = anim.get("hit_start", -1)
+        self._hit_end_frame = anim.get("hit_end", self._hit_start_frame)
+        self._defender_ref = defender if self._hit_start_frame >= 0 else None
+        if skill.is_defense:
+            self._defended_this_turn = True
         if sound_manager and anim.get("sound"):
             cb = anim.get("sound_fn")
             if cb:
                 cb() if callable(cb) else sound_manager.play(cb)
+
+    def resume_freeze(self):
+        if self._state == "freeze" and self._freeze_total == -1:
+            self._set_idle()
 
     def update(self, dt_ms: int):
         if not self._frames_idle:
@@ -182,6 +203,8 @@ class Brainrot:
         if self._tint_time > 0:
             self._tint_time = max(0, self._tint_time - dt_ms)
         if self._state == "freeze":
+            if self._freeze_total == -1:
+                return
             self._freeze_time -= dt_ms
             if self._freeze_time <= 0:
                 self._set_idle()
@@ -194,11 +217,19 @@ class Brainrot:
             self._time_acc -= frame_time
             self._frame_idx += 1
             if self._state == "skill":
-                if self._defender_ref and self._frame_idx == self._collision_frame:
-                    self._defender_ref._tint_time = self._collision_time
-                if self._freeze_total and self._frame_idx == self._freeze_frame:
+                if self._defender_ref:
+                    if self._frame_idx == self._hit_start_frame:
+                        if not self._defender_ref._defended_this_turn:
+                            self._defender_ref._red_active = True
+                            self._defender_ref._frame_idx = 0
+                    if self._frame_idx == self._hit_end_frame + 1:
+                        self._defender_ref._red_active = False
+                if self._freeze_total and self._freeze_total != -1 and self._frame_idx == self._freeze_frame:
                     self._state = "freeze"
                     self._freeze_time = self._freeze_total
+                    return
+                if self._freeze_total == -1 and self._frame_idx == self._freeze_frame:
+                    self._state = "freeze"
                     return
             if self._frame_idx >= len(self._frames_active):
                 self._set_idle()
@@ -211,10 +242,12 @@ class Brainrot:
             self.load_assets()
         if not self._frames_active:
             return
-        frame = self._frames_active[self._frame_idx % len(self._frames_active)]
+        use_red = self._state == "idle" and self._red_active and self._frames_idle_red
+        frames = self._frames_idle_red if use_red else self._frames_active
+        frame = frames[self._frame_idx % len(frames)]
         if self.flipped:
             frame = pygame.transform.flip(frame, True, False)
-        if self._tint_time > 0:
+        if self._tint_time > 0 and not use_red:
             frame = _tint_red(frame)
         fw, fh = frame.get_size()
         sw, sh = screen.get_size()

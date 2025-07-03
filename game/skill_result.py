@@ -10,3 +10,4 @@ class SkillResult:
     states_applied: List[str] = field(default_factory=list)
     state_scope: str = "persistent"
     nullify: bool = False
+    blocked: bool = False
